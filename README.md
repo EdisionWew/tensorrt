@@ -48,6 +48,7 @@ C++
 		prob->getOutput(0)->setName(OUTPUT_BLOB_NAME);
 
 3.创建引擎
+
 		builder->setMaxBatchSize(maxBatchSize);
 		builder->setMaxWorkspaceSize(1 << 20);
 		ICudaEngine* engine = builder->buildCudaEngine(*network);//创建引擎
@@ -61,6 +62,7 @@ C++
 		IRuntime* runtime = createInferRuntime(gLogger);
 		ICudaEngine* engine = runtime->deserializeCudaEngine(modelData, modelSize,nullptr); //创建一个运行对象来反序列化
 5.执行推理
+
 		IExecutionContext *context = engine->createExecutionContext()；//上下文伴随着引擎建立，它存储了引擎所需要的模型参数、网络定义
 		int inputIndex = engine.getBindingIndex(INPUT_BLOB_NAME);
 		int outputIndex = engine.getBindingIndex(OUTPUT_BLOB_NAME);//根据输入输出blob名字获取对应的输入输出索引
@@ -134,7 +136,7 @@ Python语言
 
 	runtime = trt.infer.create_infer_runtime(GLOGGER)
 	engine =runtime.deserialize_cuda_engine(modelstream.data(),modelstream.size(), None)
-	modelstream.destroy()//反序列化 
+	modelstream.destroy()//反序列化
 5.执行推理
 
 	context = engine.create_execution_context()
@@ -142,5 +144,6 @@ Python语言
 	d_output = cuda.mem_alloc(outsize)
 	bindings = [int(d_input), int(d_output)]
 	context.enqueue(batch_size, bindings, stream.handle, None)
-	cuda.memcpy_dtoh_async(output, d_output, stream)  	stream.synchronize()
+	cuda.memcpy_dtoh_async(output, d_output, stream)
+	stream.synchronize()
 	return output
