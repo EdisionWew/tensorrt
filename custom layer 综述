@@ -1,0 +1,86 @@
+tensorrt 的执行过程一共分为五部曲，分别为，构建builder和网络、构建推理引擎，引擎序列化、引擎反序列化，执行推理引擎，因此custom layer的构建也必须包含这五个阶段的实现
+
+1.在网络构建阶段需要告诉tensorrt custom layer的输出单元维度，主要通过以下两个函数实现
+
+	getNbOutputs()--获取输出层的输出单元个数
+	getOutputDismensions()--需要指明输出单元的维度，其中该函数有三个参数分别为：输入层的索引（有几个输入层）、输入层、输入矩阵的个数，通过该函数需要计算输出单元的维度，后者两个参数是由tensorrt内部给出
+	
+2.推理engine构建阶段
+
+	configure()--如果需要对该层input矩阵进行验证或者选择卷积算法等操作可以在该处实现，如果不需要可以留白。值得注意的是，configure函数只在构建阶段被调用，因此函数内确立的任何参数都需要存储为flugin类内成员才能在其他阶段被调用
+	getWorkspaceSize()--如果在运行时需要tensorrt管理的workspace可以在该处进行配置，无需管理的话，可以直接返回0即可
+	
+3.推理engine序列化阶段
+
+	getSerializationSize()--获取engine序列化空间大小
+	Serialize()--实现该层参数的序列化
+	irtual void serialize(void* buffer) override
+    {
+        char* d = static_cast<char*>(buffer), *a = d;
+ 
+        write(d, mNbInputChannels);
+        write(d, mNbOutputChannels);
+        write(d, mBiasWeights.count);
+        write(d, mDataType);
+        convertAndCopyToBuffer(d, mKernelWeights);
+        convertAndCopyToBuffer(d, mBiasWeights);
+        assert(d == a + getSerializationSize());
+    }
+	void convertAndCopyToBuffer(char*& buffer, const Weights& weights)
+    {
+        if (weights.type != mDataType)
+            for (int64_t v = 0; v < weights.count; ++v)
+                if (mDataType == DataType::kFLOAT)
+                    reinterpret_cast<float*>(buffer)[v] = fp16::__half2float(static_cast<const __half*>(weights.values)[v]);
+                else
+                    reinterpret_cast<__half*>(buffer)[v] = fp16::__float2half(static_cast<const float*>(weights.values)[v]);
+        else
+            memcpy(buffer, weights.values, weights.count * type2size(mDataType));
+        buffer += weights.count * type2size(mDataType);
+    }
+	
+4.推理engine反序列化阶段
+	
+	custom layer的反序列化过程是在反序列化整个模型的时候进行的，并通过实例化该flugin类实现。
+	IRuntime* runtime = createInferRuntime(gLogger);
+    ICudaEngine* engine = runtime->deserializeCudaEngine(gieModelStream->data(), gieModelStream->size(), &pluginFactory);
+	FCPlugin(const void* data, size_t length)
+    {
+        const char* d = static_cast<const char*>(data), *a = d;
+        read(d, mNbInputChannels);
+        read(d, mNbOutputChannels);
+ 
+        mKernelWeights.count = mNbInputChannels * mNbOutputChannels;
+        mKernelWeights.values = nullptr;
+ 
+        read(d, mBiasWeights.count);
+        mBiasWeights.values = nullptr;
+ 
+        read(d, mDataType);
+ 
+        deserializeToDevice(d, mDeviceKernel, mKernelWeights.count*type2size(mDataType));
+        deserializeToDevice(d, mDeviceBias, mBiasWeights.count*type2size(mDataType));
+        assert(d == a + length);
+    }
+	void deserializeToDevice(const char*& hostBuffer, void*& deviceWeights, size_t size)
+    {
+        deviceWeights = copyToDevice(hostBuffer, size);
+        hostBuffer += size;
+    }
+	void* copyToDevice(const void* data, size_t count)
+    {
+        void* deviceData;
+        CHECK(cudaMalloc(&deviceData, count));
+        CHECK(cudaMemcpy(deviceData, data, count, cudaMemcpyHostToDevice));
+        return deviceData;
+    }
+	
+4.执行推理engine阶段
+
+	initialize() terminate()分别在builder构建执行网络自动优化和创建/销毁执行context时进行调用
+	enqueue()时在执行custom layer时被调用，即执行插件层的forward传递过程，该函数通常包含五个参数：input batchSize、input tensor、output tensor、worksapce、steam，
+		其中batchSize指构建engine时构建的最大batchSize，值得注意的是这里我们没有传递inputchannel等信息，因此需要在序列化时把该部分信息保留下来
+	
+	
+	
+	
